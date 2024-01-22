@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using Unity.WebRTC;
 using UnityEngine;
 using UnityEngine.UI;
@@ -25,6 +26,9 @@ class DataChannelSample : MonoBehaviour
     private DelegateOnClose onDataChannelClose;
     private DelegateOnDataChannel onDataChannel;
 
+    private List<RTCIceCandidate> pc1IceCandidateBuffer = new List<RTCIceCandidate>();
+    private List<RTCIceCandidate> pc2IceCandidateBuffer = new List<RTCIceCandidate>();
+
     private void Awake()
     {
         callButton.onClick.AddListener(() => { StartCoroutine(Call()); });
@@ -39,8 +43,8 @@ class DataChannelSample : MonoBehaviour
 
         pc1OnIceConnectionChange = state => { OnIceConnectionChange(pc1, state); };
         pc2OnIceConnectionChange = state => { OnIceConnectionChange(pc2, state); };
-        pc1OnIceCandidate = candidate => { OnIceCandidate(pc1, candidate); };
-        pc2OnIceCandidate = candidate => { OnIceCandidate(pc2, candidate); };
+     //   pc1OnIceCandidate = Pc1OnIceCandidate; // candidate => { OnIceCandidate(pc1, candidate); };
+     //   pc2OnIceCandidate = PC2On candidate => { OnIceCandidate(pc2, candidate); };
         onDataChannel = channel =>
         {
             remoteDataChannel = channel;
@@ -113,11 +117,32 @@ class DataChannelSample : MonoBehaviour
 
     void Pc1OnIceCandidate(RTCIceCandidate candidate)
     {
-        OnIceCandidate(pc1, candidate);
+        pc1IceCandidateBuffer.Add(candidate);
     }
+    
+    void ProcessPc1CandidateBuffer()
+    {
+        Debug.Log("ProcessPc1CandidateBuffer - length: "+pc1IceCandidateBuffer.Count);
+        foreach (var candidate in pc1IceCandidateBuffer)
+        {
+            OnIceCandidate(pc1, candidate);
+        }
+        pc1IceCandidateBuffer.Clear();
+    }
+
     void Pc2OnIceCandidate(RTCIceCandidate candidate)
     {
-        OnIceCandidate(pc2, candidate);
+        pc2IceCandidateBuffer.Add(candidate);
+    }
+    
+    void ProcessPc2CandidateBuffer()
+    {
+        Debug.Log("ProcessPc2CandidateBuffer - length: "+pc2IceCandidateBuffer.Count);
+        foreach (var candidate in pc2IceCandidateBuffer)
+        {
+            OnIceCandidate(pc2, candidate);
+        }
+        pc2IceCandidateBuffer.Clear();
     }
 
     IEnumerator Call()
@@ -127,11 +152,11 @@ class DataChannelSample : MonoBehaviour
         var configuration = GetSelectedSdpSemantics();
         pc1 = new RTCPeerConnection(ref configuration);
         Debug.Log("Created local peer connection object pc1");
-        pc1.OnIceCandidate = pc1OnIceCandidate;
+        pc1.OnIceCandidate = Pc1OnIceCandidate;
         pc1.OnIceConnectionChange = pc1OnIceConnectionChange;
         pc2 = new RTCPeerConnection(ref configuration);
         Debug.Log("Created remote peer connection object pc2");
-        pc2.OnIceCandidate = pc2OnIceCandidate;
+        pc2.OnIceCandidate = Pc2OnIceCandidate;
         pc2.OnIceConnectionChange = pc2OnIceConnectionChange;
         pc2.OnDataChannel = onDataChannel;
 
@@ -176,7 +201,10 @@ class DataChannelSample : MonoBehaviour
     /// <param name="streamEvent"></param>
     void OnIceCandidate(RTCPeerConnection pc, RTCIceCandidate candidate)
     {
-        GetOtherPc(pc).AddIceCandidate(candidate);
+        if (!GetOtherPc(pc).AddIceCandidate(candidate)) {
+            Debug.Log($"{GetName(pc)} failed to add ICE Candidate");
+            return;
+        }
         Debug.Log($"{GetName(pc)} ICE candidate:\n {candidate.Candidate}");
     }
 
@@ -186,7 +214,7 @@ class DataChannelSample : MonoBehaviour
     }
     string GetName(RTCPeerConnection pc)
     {
-        return (pc == pc1) ? "pc1" : "pc2";
+        return (pc == pc1) ? gameObject.name+" pc1" : gameObject.name+" pc2";
     }
 
     RTCPeerConnection GetOtherPc(RTCPeerConnection pc)
@@ -196,8 +224,8 @@ class DataChannelSample : MonoBehaviour
 
     IEnumerator OnCreateOfferSuccess(RTCSessionDescription desc)
     {
-        Debug.Log($"Offer from pc1\n{desc.sdp}");
-        Debug.Log("pc1 setLocalDescription start");
+        Debug.Log(GetName(pc1)+$" Offer from pc1\n{desc.sdp}");
+        Debug.Log(GetName(pc1)+" setLocalDescription start");
         var op = pc1.SetLocalDescription(ref desc);
         yield return op;
 
@@ -211,7 +239,7 @@ class DataChannelSample : MonoBehaviour
             OnSetSessionDescriptionError(ref error);
         }
 
-        Debug.Log("pc2 setRemoteDescription start");
+        Debug.Log(GetName(pc2)+" setRemoteDescription start");
         var op2 = pc2.SetRemoteDescription(ref desc);
         yield return op2;
         if (!op2.IsError)
@@ -223,7 +251,7 @@ class DataChannelSample : MonoBehaviour
             var error = op2.Error;
             OnSetSessionDescriptionError(ref error);
         }
-        Debug.Log("pc2 createAnswer start");
+        Debug.Log(GetName(pc2)+" createAnswer start");
         // Since the 'remote' side has no media stream we need
         // to pass in the right constraints in order for it to
         // accept the incoming offer of audio and video.
@@ -238,6 +266,9 @@ class DataChannelSample : MonoBehaviour
         {
             OnCreateSessionDescriptionError(op3.Error);
         }
+
+        ProcessPc1CandidateBuffer();
+        ProcessPc2CandidateBuffer();
     }
 
     void OnSetLocalSuccess(RTCPeerConnection pc)
@@ -254,8 +285,8 @@ class DataChannelSample : MonoBehaviour
 
     IEnumerator OnCreateAnswerSuccess(RTCSessionDescription desc)
     {
-        Debug.Log($"Answer from pc2:\n{desc.sdp}");
-        Debug.Log("pc2 setLocalDescription start");
+        Debug.Log(GetName(pc2)+$" Answer:\n{desc.sdp}");
+        Debug.Log(GetName(pc2)+" setLocalDescription start");
         var op = pc2.SetLocalDescription(ref desc);
         yield return op;
 
@@ -269,7 +300,7 @@ class DataChannelSample : MonoBehaviour
             OnSetSessionDescriptionError(ref error);
         }
 
-        Debug.Log("pc1 setRemoteDescription start");
+        Debug.Log(GetName(pc1)+" setRemoteDescription start");
 
         var op2 = pc1.SetRemoteDescription(ref desc);
         yield return op2;
@@ -322,8 +353,9 @@ class DataChannelSample : MonoBehaviour
         Debug.Log($"{GetName(pc)} failed to add ICE Candidate: ${error}");
     }
 
-    void OnCreateSessionDescriptionError(RTCError e)
+    void OnCreateSessionDescriptionError(RTCError error)
     {
+        Debug.Log($"Failed to Create Session Description: ${error}");
 
     }
 }
